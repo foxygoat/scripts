@@ -15,6 +15,7 @@ esac
 
 case $(uname -m) in
   x86_64) ARCH=amd64 ;;
+  arm64) ARCH=arm64 ;;
   arm*) ARCH=armv6l ;;
   aarch64) ARCH=arm64 ;;
 esac
