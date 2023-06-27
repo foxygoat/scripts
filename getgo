@@ -58,7 +58,7 @@ get_latest_info() {
   case "${1-}" in
     unstable)
       qp='&include=all'
-      select_release='.[] | select(.stable | not)'
+      select_release='.[0] | select(.stable | not)'
       ;;
     stable | '')
       select_release='.[0]'
