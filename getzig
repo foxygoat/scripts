@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#
+# Download the binary archive of the latest Zig toolchain and install it
+# if it is not already installed.
+#-----------------------------------------------------------------------------
+#
+# Where the Zig toolchain is installed
+BASE_DIR=/opt/zig
+
+: "${GETZIG_DEBUG:=0}"
+: "${GETZIG_DRYRUN:=0}"
+
+#-----------------------------------------------------------------------------
+main() {
+	set -euo pipefail
+	declare -A info
+	local release="${1-stable}" infovars
+
+	checkdeps
+
+	infovars="$(get_latest_info "${release}")"
+	while IFS='=' read -r key value; do
+		info["${key}"]="${value}"
+	done <<<"${infovars}"
+
+	version="${info[version]}"
+	install_dir="${BASE_DIR}/${version}"
+	if [[ -e "${install_dir}" ]]; then
+		printf '%s version %s is up to date\n' "${release}" "${version}"
+		exit 0
+	fi
+
+	printf 'Downloading latest %s version %s\n' "${release}" "${version}"
+	mkdir "${install_dir}"
+	run curl -sL -o - "${info[tarball]}" | run tar -C "${install_dir}" -x -J --strip-components=1
+	run mkdir "${install_dir}/bin"
+	run mv "${install_dir}/zig" "${install_dir}/bin"
+	run ln -nsf "${version}" "${BASE_DIR}/${release}"
+}
+
+#-----------------------------------------------------------------------------
+checkdeps() {
+	if ((BASH_VERSINFO[0] < 4)); then
+		echo "This script requires bash 4 or later" >&2
+		return 1
+	fi
+
+	if ! which jq >/dev/null 2>&1; then
+		echo "jq is required" >&2
+		return 1
+	fi
+
+	if ! which curl >/dev/null 2>&1; then
+		echo "curl is required" >&2
+		return 1
+	fi
+}
+#-----------------------------------------------------------------------------
+get_latest_info() {
+	local os arch
+	case $(uname) in
+	Linux) os=linux ;;
+	Darwin) os=macos ;;
+	*)
+		printf 'Unknown OS name: %s\n' "$(uname)" >&2
+		exit 1
+		;;
+	esac
+
+	case $(uname -m) in
+	x86_64) arch=x86_64 ;;
+	aarch64 | arm64) arch=aarch64 ;;
+	arm*) arch=armv7a ;;
+	*)
+		printf 'Unknown architecture: %s\n' "$(uname -m)" >&2
+		exit 1
+		;;
+	esac
+
+	local select_release=''
+	local select_file=".[\"${arch}-${os}\"] + {version: .version}"
+	local to_key_val='to_entries | .[] | .key + "=" + (.value | tostring)'
+
+	case "${1-}" in
+	master)
+		select_release='.master'
+		;;
+	stable | '')
+		# Note: this relies on jq processing map entries in the order they appear. This
+		# may not be the case with gojq
+		select_release='to_entries | .[1] | {version: .key} + .value'
+		;;
+	*)
+		printf 'unknown release type. Must be stable (default) or master\n' >&2
+		exit 1
+		;;
+	esac
+
+	alwaysrun curl -sL "https://ziglang.org/download/index.json" |
+		alwaysrun jq -r "${select_release} | ${select_file} | ${to_key_val}" |
+		debug
+}
+
+#-----------------------------------------------------------------------------
+# run runs a command if dry run mode is off, and prints that command to
+# stderr if debug or dry run mode is on.
+run() {
+	if ((GETZIG_DEBUG > 0 || GETZIG_DRYRUN > 0)); then
+		echo "$@" >&2
+	fi
+	if ((GETZIG_DRYRUN > 0)); then
+		return
+	fi
+	"$@"
+}
+
+# alwaysrun runs a command even if dry run mode is on.
+alwaysrun() {
+	if ((GETZIG_DEBUG > 0 || GETZIG_DRYRUN > 0)); then
+		echo "$@" >&2
+	fi
+	"$@"
+}
+
+# debug sends stdin to stdout, and if debug mode is on, also sends stdin to
+# stderr.
+debug() {
+	if ((GETZIG_DEBUG > 0)); then
+		tee /dev/stderr
+	else
+		cat
+	fi
+}
+#-----------------------------------------------------------------------------
+# Only run main if executed as a script and not sourced.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
