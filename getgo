@@ -8,68 +8,72 @@
 BASE_DIR=/opt/go
 
 case $(uname) in
-  Linux) OS=linux ;;
-  Darwin) OS=darwin ;;
-  *) printf 'Unknown OS name: %s\n' "$(uname)" >&2; exit 1 ;;
+Linux) OS=linux ;;
+Darwin) OS=darwin ;;
+*)
+	printf 'Unknown OS name: %s\n' "$(uname)" >&2
+	exit 1
+	;;
 esac
 
 case $(uname -m) in
-  x86_64) ARCH=amd64 ;;
-  arm64) ARCH=arm64 ;;
-  arm*) ARCH=armv6l ;;
-  aarch64) ARCH=arm64 ;;
+x86_64) ARCH=amd64 ;;
+arm64) ARCH=arm64 ;;
+arm*) ARCH=armv6l ;;
+aarch64) ARCH=arm64 ;;
 esac
 
 #-----------------------------------------------------------------------------
 main() {
-  set -euo pipefail
-  declare -A info
-  local release="${1-stable}"
+	set -euo pipefail
+	declare -A info
+	local release="${1-stable}"
 
-  while IFS='=' read -r key value; do
-    info["${key}"]="${value}"
-  done <<< "$(get_latest_info "${release}")"
+	while IFS='=' read -r key value; do
+		info["${key}"]="${value}"
+	done <<<"$(get_latest_info "${release}")"
 
-  if ! [[ "${info[version]}" =~ go(.*) ]]; then
-    printf 'Version error: %s\n' "${info[version]}" >&2
-    exit 1
-  fi
+	if ! [[ "${info[version]}" =~ go(.*) ]]; then
+		printf 'Version error: %s\n' "${info[version]}" >&2
+		exit 1
+	fi
 
-  version="${BASH_REMATCH[1]}"
-  install_dir="${BASE_DIR}/${version}"
-  if [[ -e "${install_dir}" ]]; then
-    printf '%s version %s is up to date\n' "${release}" "${version}"
-    exit 0
-  fi
+	version="${BASH_REMATCH[1]}"
+	install_dir="${BASE_DIR}/${version}"
+	if [[ -e "${install_dir}" ]]; then
+		printf '%s version %s is up to date\n' "${release}" "${version}"
+		exit 0
+	fi
 
-  printf 'Downloading latest %s version %s\n' "${release}" "${version}"
-  mkdir "${install_dir}"
-  curl -sL -o - "https://golang.org/dl/${info[filename]}" |
-    tar -C "${install_dir}" -x -z --strip-components=1
-  ln -nsf "${version}" "${BASE_DIR}/${release}"
+	printf 'Downloading latest %s version %s\n' "${release}" "${version}"
+	mkdir "${install_dir}"
+	curl -sL -o - "https://golang.org/dl/${info[filename]}" |
+		tar -C "${install_dir}" -x -z --strip-components=1
+	ln -nsf "${version}" "${BASE_DIR}/${release}"
 }
 
 #-----------------------------------------------------------------------------
 get_latest_info() {
-  local qp='' select_release=''
-  local select_file="select(.kind == \"archive\" and .os == \"${OS}\" and .arch == \"${ARCH}\")"
-  local to_key_val='to_entries | .[] | .key + "=" + (.value | tostring)'
+	local qp='' select_release=''
+	local select_file="select(.kind == \"archive\" and .os == \"${OS}\" and .arch == \"${ARCH}\")"
+	local to_key_val='to_entries | .[] | .key + "=" + (.value | tostring)'
 
-  case "${1-}" in
-    unstable)
-      qp='&include=all'
-      select_release='.[0] | select(.stable | not)'
-      ;;
-    stable | '')
-      select_release='.[0]'
-      ;;
-    *)
-      printf 'unknown release type. Must be stable (default) or unstable\n' >&2
-      exit 1
-  esac
+	case "${1-}" in
+	unstable)
+		qp='&include=all'
+		select_release='.[0] | select(.stable | not)'
+		;;
+	stable | '')
+		select_release='.[0]'
+		;;
+	*)
+		printf 'unknown release type. Must be stable (default) or unstable\n' >&2
+		exit 1
+		;;
+	esac
 
-  curl -sL "https://golang.org/dl/?mode=json${qp}" \
-    | jq -r "${select_release} | .files[] | ${select_file} | ${to_key_val}"
+	curl -sL "https://golang.org/dl/?mode=json${qp}" |
+		jq -r "${select_release} | .files[] | ${select_file} | ${to_key_val}"
 }
 
 #-----------------------------------------------------------------------------
