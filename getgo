@@ -7,21 +7,8 @@
 # Where the Go toolchain is installed
 BASE_DIR=/opt/go
 
-case $(uname) in
-Linux) OS=linux ;;
-Darwin) OS=darwin ;;
-*)
-	printf 'Unknown OS name: %s\n' "$(uname)" >&2
-	exit 1
-	;;
-esac
-
-case $(uname -m) in
-x86_64) ARCH=amd64 ;;
-arm64) ARCH=arm64 ;;
-arm*) ARCH=armv6l ;;
-aarch64) ARCH=arm64 ;;
-esac
+: "${GETGO_DEBUG:=0}"
+: "${GETGO_DRYRUN:=0}"
 
 #-----------------------------------------------------------------------------
 main() {
@@ -29,13 +16,15 @@ main() {
 	declare -A info
 	local release="${1-stable}"
 
+	checkdeps
+
+	infovars="$(get_latest_info "${release}")"
 	while IFS='=' read -r key value; do
 		info["${key}"]="${value}"
-	done <<<"$(get_latest_info "${release}")"
+	done <<<"${infovars}"
 
 	if ! [[ "${info[version]}" =~ go(.*) ]]; then
-		printf 'Version error: %s\n' "${info[version]}" >&2
-		exit 1
+		errexit 'Version error: %s\n' "${info[version]}"
 	fi
 
 	version="${BASH_REMATCH[1]}"
@@ -47,15 +36,44 @@ main() {
 
 	printf 'Downloading latest %s version %s\n' "${release}" "${version}"
 	mkdir "${install_dir}"
-	curl -sL -o - "https://golang.org/dl/${info[filename]}" |
-		tar -C "${install_dir}" -x -z --strip-components=1
-	ln -nsf "${version}" "${BASE_DIR}/${release}"
+	run curl -sL -o - "https://golang.org/dl/${info[filename]}" |
+		run tar -C "${install_dir}" -x -z --strip-components=1
+	run ln -nsf "${version}" "${BASE_DIR}/${release}"
+}
+
+#-----------------------------------------------------------------------------
+checkdeps() {
+	if ((BASH_VERSINFO[0] < 4)); then
+		errexit 'This script requires bash 4 or later'
+	fi
+
+	if ! which jq >/dev/null 2>&1; then
+		errexit 'jq is required'
+	fi
+
+	if ! which curl >/dev/null 2>&1; then
+		errexit 'curl is required'
+	fi
 }
 
 #-----------------------------------------------------------------------------
 get_latest_info() {
+	local os arch
+	case $(uname) in
+	Linux) os=linux ;;
+	Darwin) os=darwin ;;
+	*) errexit 'Unknown OS name: %s\n' "$(uname)" ;;
+	esac
+
+	case $(uname -m) in
+	x86_64) arch=amd64 ;;
+	arm64 | aarch64) arch=arm64 ;;
+	arm*) arch=armv6l ;;
+	*) errexit 'Unknown architecture: %s\n' "$(uname -m)" ;;
+	esac
+
 	local qp='' select_release=''
-	local select_file="select(.kind == \"archive\" and .os == \"${OS}\" and .arch == \"${ARCH}\")"
+	local select_file="select(.kind == \"archive\" and .os == \"${os}\" and .arch == \"${arch}\")"
 	local to_key_val='to_entries | .[] | .key + "=" + (.value | tostring)'
 
 	case "${1-}" in
@@ -67,14 +85,53 @@ get_latest_info() {
 		select_release='.[0]'
 		;;
 	*)
-		printf 'unknown release type. Must be stable (default) or unstable\n' >&2
-		exit 1
+		errexit 'Unknown release type. Must be stable (default) or unstable\n'
 		;;
 	esac
 
-	curl -sL "https://golang.org/dl/?mode=json${qp}" |
-		jq -r "${select_release} | .files[] | ${select_file} | ${to_key_val}"
+	alwaysrun curl -sL "https://golang.org/dl/?mode=json${qp}" |
+		alwaysrun jq -r "${select_release} | .files[] | ${select_file} | ${to_key_val}" |
+		debug
 }
 
 #-----------------------------------------------------------------------------
-[[ "$(caller)" != 0\ * ]] || main "$@"
+# run runs a command if dry run mode is off, and prints that command to
+# stderr if debug or dry run mode is on.
+run() {
+	if ((GETGO_DEBUG > 0 || GETGO_DRYRUN > 0)); then
+		echo "$@" >&2
+	fi
+	if ((GETGO_DRYRUN > 0)); then
+		return
+	fi
+	"$@"
+}
+
+# alwaysrun runs a command even if dry run mode is on.
+alwaysrun() {
+	if ((GETGO_DEBUG > 0 || GETGO_DRYRUN > 0)); then
+		echo "$@" >&2
+	fi
+	"$@"
+}
+
+# debug sends stdin to stdout, and if debug mode is on, also sends stdin to
+# stderr.
+debug() {
+	if ((GETGO_DEBUG > 0)); then
+		tee /dev/stderr
+	else
+		cat
+	fi
+}
+
+errexit() {
+	# shellcheck disable=SC2059
+	# We want the first arg to be a printf format string.
+	printf "$@" >&2
+	exit 1
+}
+
+#-----------------------------------------------------------------------------
+# Only run main if executed as a script and not sourced.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
