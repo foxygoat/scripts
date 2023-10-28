@@ -2,6 +2,11 @@
 #
 # Download the binary archive of the latest Go toolchain and install it
 # if it is not already installed.
+#
+# Usage:
+# getgo [stable|prerelease]
+#
+# The default is "stable" if no release specified.
 #-----------------------------------------------------------------------------
 #
 # Where the Go toolchain is installed
@@ -20,11 +25,24 @@ main() {
 
 	infovars="$(get_latest_info "${release}")"
 	while IFS='=' read -r key value; do
+		[[ -n "${key}" ]] || continue
 		info["${key}"]="${value}"
 	done <<<"${infovars}"
 
+	if [[ -z "${info[version]-}" ]]; then
+		if [[ "${release}" == 'prerelease' ]]; then
+			printf 'No prerelease releases available\n'
+			exit 0
+		fi
+		errexit 'No version returned when querying Go download server. Sorry\n'
+	fi
+
+	if [[ -z "${info[filename]-}" ]]; then
+		errexit 'No filename returned by Go download server for version %s. Sorry\n' "${info[version]}"
+	fi
+
 	if ! [[ "${info[version]}" =~ go(.*) ]]; then
-		errexit 'Version error: %s\n' "${info[version]}"
+		errexit 'Unknown version format returned by Go download server: %s\n' "${info[version]}"
 	fi
 
 	version="${BASH_REMATCH[1]}"
@@ -77,7 +95,7 @@ get_latest_info() {
 	local to_key_val='to_entries | .[] | .key + "=" + (.value | tostring)'
 
 	case "${1-}" in
-	unstable)
+	prerelease)
 		qp='&include=all'
 		select_release='.[0] | select(.stable | not)'
 		;;
@@ -85,7 +103,7 @@ get_latest_info() {
 		select_release='.[0]'
 		;;
 	*)
-		errexit 'Unknown release type. Must be stable (default) or unstable\n'
+		errexit 'Unknown release type. Must be "stable" (default) or "prerelease"\n'
 		;;
 	esac
 
