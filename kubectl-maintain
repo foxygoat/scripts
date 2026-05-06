@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# kubectl-maintain is a kubectl plugin for putting a node into and taking out
+# of maintenance. When a node is in maintenance, no pods run on it, including
+# DaemonSets. It allows the kubelet to be shutdown so the node can be rebooted
+# or other maintenance activities performed.
+#
+# If this script is installed somewhere other than the git repository it comes
+# from, a symlink of kubectl_complete-maintain should be created to link to
+# this script, alongside it. This will allow command line completion to work.
+
+main() {
+	# taint name is not particularly relevant, just the :NoEexecute when applied.
+	taint='xdna.net/maintenance'
+
+	case "${0##*/}" in
+	kubectl-maintain)
+		maintain "$@"
+		;;
+	kubectl_complete-maintain)
+		maintain_complete "$@"
+		;;
+	*)
+		echo "unknown invocation: $0" >&2
+		exit 1
+		;;
+	esac
+}
+
+maintain() {
+	# set -e makes this not idempotent, but that's intentional. Continuing when
+	# something does not run as expected is not desirable as you can end up
+	# being more destructive than planned.
+	set -euo pipefail
+	case "${1-}" in
+	start)
+		node="${2:?usage: kubectl maintain start <node>}"
+		kubectl drain --ignore-daemonsets --delete-emptydir-data -- "$node"
+		kubectl taint node -- "$node" "${taint}:NoExecute"
+		echo "Node $node marked for maintenance. Pods evicted"
+		;;
+	stop)
+		node="${2:?usage: kubectl maintain stop <node>}"
+		kubectl taint node -- "$node" "${taint}:NoExecute-"
+		kubectl uncordon -- "$node"
+		echo "Node $node ready for workloads"
+		;;
+	*)
+		echo "usage: kubectl maintain {start|stop} <node>" >&2
+		return 1
+		;;
+	esac
+}
+
+maintain_complete() {
+	set -euo pipefail
+	trap 'echo :4' EXIT # BashCompDirectiveNoFileComp - disable filename completion
+	local nodes_jq='.items[] | select(.spec.taints // [] | map(.key) | index("%s")%s) | .metadata.name'
+	case "$#" in
+	1) printf '%s\n' start stop ;;
+	2)
+		# shellcheck disable=SC2059 # I have format strings in the var
+		if [[ "$1" == start ]]; then
+			printf -v jq "$nodes_jq" "$taint" ' | not'
+		elif [[ "$1" == stop ]]; then
+			printf -v jq "$nodes_jq" "$taint" ''
+		else
+			return 1
+		fi
+		kubectl get nodes -o json | jq -r "$jq"
+		;;
+	esac
+}
+main "$@"
